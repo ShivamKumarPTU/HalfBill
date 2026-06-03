@@ -1,0 +1,399 @@
+openapi: "3.0.3"
+info:
+  title: Project HalfBill — ServiceDesk API
+  description: |
+    ServiceDesk module of the OneBill revenue operations platform.
+    Covers support ticket lifecycle, comments, and similar ticket search.
+    Implement in fastapi_app/routers/servicedesk.py.
+    MCP tools in agents/servicedesk/servicedesk_tools.py call these endpoints.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8001
+    description: Local development server (Product FastAPI)
+
+tags:
+  - name: Categories
+    description: Ticket categories — pre-seeded, read only
+  - name: Tickets
+    description: Support ticket lifecycle
+  - name: Comments
+    description: Ticket comments and internal notes
+  - name: Metrics
+    description: Agentic Hub business metrics
+
+paths:
+
+  # ── Categories ────────────────────────────────────────────────
+
+  /servicedesk/categories:
+    get:
+      summary: List all ticket categories
+      tags: [Categories]
+      responses:
+        "200":
+          description: All 12 pre-seeded categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CategoryOut"
+
+  # ── Tickets ───────────────────────────────────────────────────
+
+  /servicedesk/tickets:
+    post:
+      summary: Create a new support ticket
+      tags: [Tickets]
+      description: |
+        Creates a ticket with status 'open' by default.
+        If category requires_field_visit=True: status set to 'pending_field_visit'.
+        If anomaly_id provided: links ticket to billing anomaly (A2A link).
+        Generates ticket_number in format TKT-YYYY-NNNNN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTicketRequest"
+      responses:
+        "201":
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      summary: List tickets with optional filters
+      tags: [Tickets]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/TicketStatus"
+        - name: priority
+          in: query
+          schema:
+            $ref: "#/components/schemas/Priority"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Ticket list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TicketOut"
+
+  /servicedesk/tickets/open:
+    get:
+      summary: Get all open tickets ordered by priority then age
+      tags: [Tickets]
+      responses:
+        "200":
+          description: Open tickets critical first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TicketOut"
+
+  /servicedesk/tickets/pending-field:
+    get:
+      summary: Get tickets awaiting field technician — FSM handoff queue
+      tags: [Tickets]
+      responses:
+        "200":
+          description: Tickets with status pending_field_visit
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TicketOut"
+
+  /servicedesk/tickets/similar:
+    get:
+      summary: Find similar open tickets using full-text search
+      tags: [Tickets]
+      parameters:
+        - name: subject
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 3
+          description: Search term matched against ticket subject and description
+      responses:
+        "200":
+          description: Similar open tickets up to 5 results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TicketOut"
+
+  /servicedesk/tickets/{ticket_number}:
+    get:
+      summary: Get one ticket by ticket number including comments
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/TicketNumber"
+      responses:
+        "200":
+          description: Ticket with comments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /servicedesk/tickets/{ticket_number}/status:
+    put:
+      summary: Update ticket status and optionally priority or resolution
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/TicketNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTicketStatusRequest"
+      responses:
+        "200":
+          description: Updated ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /servicedesk/tickets/customer/{customer_id}:
+    get:
+      summary: Get all tickets for a customer
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer tickets most recent first — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TicketOut"
+
+  # ── Comments ──────────────────────────────────────────────────
+
+  /servicedesk/tickets/{ticket_number}/comments:
+    post:
+      summary: Add a comment to a ticket
+      tags: [Comments]
+      parameters:
+        - $ref: "#/components/parameters/TicketNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddCommentRequest"
+      responses:
+        "201":
+          description: Comment added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      summary: Get all comments for a ticket
+      tags: [Comments]
+      parameters:
+        - $ref: "#/components/parameters/TicketNumber"
+      responses:
+        "200":
+          description: Comments oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CommentOut"
+
+  # ── Metrics ───────────────────────────────────────────────────
+
+  /servicedesk/metrics:
+    get:
+      summary: ServiceDesk business metrics for Agentic Hub
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Aggregate metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceDeskMetrics"
+
+components:
+
+  parameters:
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    TicketNumber:
+      name: ticket_number
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "TKT-2024-00001"
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    ValidationError:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+
+  schemas:
+
+    TicketStatus:
+      type: string
+      enum: [open, in_progress, pending_customer, pending_field_visit, resolved, closed]
+
+    Priority:
+      type: string
+      enum: [low, medium, high, critical]
+
+    Channel:
+      type: string
+      enum: [phone, email, chat, portal, auto]
+
+    CategoryOut:
+      type: object
+      properties:
+        id:                   { type: integer }
+        name:                 { type: string }
+        product_area:         { type: string }
+        default_priority:     { type: string }
+        requires_field_visit: { type: boolean }
+
+    CommentOut:
+      type: object
+      properties:
+        id:          { type: integer }
+        ticket_id:   { type: integer }
+        author:      { type: string }
+        comment:     { type: string }
+        is_internal: { type: boolean }
+        created_at:  { type: string }
+
+    TicketOut:
+      type: object
+      properties:
+        id:            { type: integer }
+        ticket_number: { type: string, example: "TKT-2024-00001" }
+        customer_id:   { type: integer }
+        customer_name: { type: string }
+        invoice_id:    { type: integer, nullable: true }
+        anomaly_id:    { type: integer, nullable: true }
+        category_id:   { type: integer, nullable: true }
+        category_name: { type: string, nullable: true }
+        subject:       { type: string }
+        description:   { type: string, nullable: true }
+        status:        { $ref: "#/components/schemas/TicketStatus" }
+        priority:      { $ref: "#/components/schemas/Priority" }
+        channel:       { $ref: "#/components/schemas/Channel" }
+        assigned_to:   { type: string, nullable: true }
+        resolution:    { type: string, nullable: true }
+        created_at:    { type: string }
+        updated_at:    { type: string }
+        resolved_at:   { type: string, nullable: true }
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommentOut"
+          nullable: true
+
+    CreateTicketRequest:
+      type: object
+      properties:
+        customer_id:  { type: integer }
+        subject:      { type: string }
+        description:  { type: string, nullable: true }
+        priority:     { $ref: "#/components/schemas/Priority" }
+        category_id:  { type: integer, nullable: true }
+        channel:      { $ref: "#/components/schemas/Channel" }
+        invoice_id:   { type: integer, nullable: true }
+        anomaly_id:   { type: integer, nullable: true }
+      required: [customer_id, subject]
+
+    UpdateTicketStatusRequest:
+      type: object
+      properties:
+        status:      { $ref: "#/components/schemas/TicketStatus" }
+        priority:    { $ref: "#/components/schemas/Priority" }
+        assigned_to: { type: string, nullable: true }
+        resolution:  { type: string, nullable: true }
+        notes:       { type: string, nullable: true }
+      required: [status]
+
+    AddCommentRequest:
+      type: object
+      properties:
+        author:      { type: string }
+        comment:     { type: string }
+        is_internal: { type: boolean, default: false }
+      required: [author, comment]
+
+    ServiceDeskMetrics:
+      type: object
+      properties:
+        tickets_open:           { type: integer }
+        tickets_created_today:  { type: integer }
+        tickets_resolved_today: { type: integer }
+        avg_resolution_hours:   { type: number }
+        pending_field_visit:    { type: integer }
+        by_priority:
+          type: object
+          properties:
+            critical: { type: integer }
+            high:     { type: integer }
+            medium:   { type: integer }
+            low:      { type: integer }
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Ticket TKT-9999-99999 not found"

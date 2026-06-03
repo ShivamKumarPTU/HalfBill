@@ -1,0 +1,489 @@
+openapi: "3.0.3"
+info:
+  title: Project HalfBill — Billing API
+  description: |
+    Billing module of the OneBill revenue operations platform.
+    Covers invoices, payments, and revenue anomaly detection.
+    Implement in fastapi_app/routers/billing.py.
+    MCP tools in agents/billing/billing_tools.py call these endpoints.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8001
+    description: Local development server (Product FastAPI)
+
+tags:
+  - name: Invoices
+    description: Invoice lifecycle — create, status, line items
+  - name: Payments
+    description: Payment recording and history
+  - name: Anomalies
+    description: Revenue leakage detection and resolution
+  - name: Metrics
+    description: Agentic Hub business metrics
+
+paths:
+
+  # ── Invoices ──────────────────────────────────────────────────
+
+  /billing/invoices:
+    post:
+      summary: Create a new invoice
+      tags: [Invoices]
+      description: |
+        Creates an invoice optionally linked to an accepted CPQ quote.
+        If quote_id provided, copies line items from the quote.
+        Auto-calculates tax at 8.5%. Sets status to 'draft'.
+        Sets due_date to billing_period_end + 14 days.
+        Generates invoice_number in format INV-YYYY-NNNNN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvoiceRequest"
+      responses:
+        "201":
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      summary: List invoices with optional status filter
+      tags: [Invoices]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/InvoiceStatus"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: List of invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InvoiceOut"
+
+  /billing/invoices/overdue:
+    get:
+      summary: Get all overdue invoices ordered by due date
+      tags: [Invoices]
+      responses:
+        "200":
+          description: Overdue invoices oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InvoiceOut"
+
+  /billing/invoices/{invoice_number}:
+    get:
+      summary: Get one invoice by invoice number including line items
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/InvoiceNumber"
+      responses:
+        "200":
+          description: Invoice with line items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /billing/invoices/{invoice_number}/status:
+    put:
+      summary: Update invoice status
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/InvoiceNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInvoiceStatusRequest"
+      responses:
+        "200":
+          description: Updated invoice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /billing/invoices/customer/{customer_id}:
+    get:
+      summary: Get all invoices for a customer
+      tags: [Invoices]
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer invoices most recent first — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InvoiceOut"
+
+  # ── Payments ──────────────────────────────────────────────────
+
+  /billing/payments:
+    post:
+      summary: Record a payment against an invoice
+      tags: [Payments]
+      description: |
+        Records a payment and updates invoice paid_amount.
+        If paid_amount >= total_amount, automatically sets invoice status to 'paid'.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentRequest"
+      responses:
+        "201":
+          description: Payment recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /billing/payments/invoice/{invoice_number}:
+    get:
+      summary: Get all payments for an invoice
+      tags: [Payments]
+      parameters:
+        - $ref: "#/components/parameters/InvoiceNumber"
+      responses:
+        "200":
+          description: Payment history — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PaymentOut"
+
+  # ── Anomalies ─────────────────────────────────────────────────
+
+  /billing/anomalies:
+    post:
+      summary: Flag a billing anomaly on an invoice
+      tags: [Anomalies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAnomalyRequest"
+      responses:
+        "201":
+          description: Anomaly flagged with status open
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomalyOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    get:
+      summary: List anomalies with optional filters
+      tags: [Anomalies]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/AnomalyStatus"
+        - name: severity
+          in: query
+          schema:
+            $ref: "#/components/schemas/Severity"
+      responses:
+        "200":
+          description: Anomaly list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnomalyOut"
+
+  /billing/anomalies/open:
+    get:
+      summary: Get all open anomalies ordered by severity
+      tags: [Anomalies]
+      responses:
+        "200":
+          description: Open anomalies critical first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnomalyOut"
+
+  /billing/anomalies/{anomaly_id}:
+    get:
+      summary: Get one anomaly by ID
+      tags: [Anomalies]
+      parameters:
+        - $ref: "#/components/parameters/AnomalyId"
+      responses:
+        "200":
+          description: Anomaly details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomalyOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /billing/anomalies/{anomaly_id}/status:
+    put:
+      summary: Update anomaly status — resolve or dismiss
+      tags: [Anomalies]
+      parameters:
+        - $ref: "#/components/parameters/AnomalyId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAnomalyStatusRequest"
+      responses:
+        "200":
+          description: Updated anomaly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomalyOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Metrics ───────────────────────────────────────────────────
+
+  /billing/metrics:
+    get:
+      summary: Billing business metrics for Agentic Hub
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Aggregate metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingMetrics"
+
+components:
+
+  parameters:
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    InvoiceNumber:
+      name: invoice_number
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "INV-2024-00001"
+    AnomalyId:
+      name: anomaly_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    Conflict:
+      description: Business rule violation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    ValidationError:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+
+  schemas:
+
+    InvoiceStatus:
+      type: string
+      enum: [draft, issued, paid, overdue, disputed, written_off]
+
+    AnomalyStatus:
+      type: string
+      enum: [open, investigating, resolved, dismissed]
+
+    AnomalyType:
+      type: string
+      enum: [duplicate_charge, rate_mismatch, missing_credit,
+             usage_spike, unauthorized_charge, billing_gap, overdue_balance]
+
+    Severity:
+      type: string
+      enum: [low, medium, high, critical]
+
+    PaymentMethod:
+      type: string
+      enum: [credit_card, bank_transfer, check, cash, auto_pay]
+
+    InvoiceLineItemOut:
+      type: object
+      properties:
+        id:           { type: integer }
+        product_id:   { type: integer, nullable: true }
+        product_name: { type: string, nullable: true }
+        description:  { type: string }
+        quantity:     { type: integer }
+        unit_price:   { type: number }
+        subtotal:     { type: number }
+        line_type:    { type: string, enum: [recurring, one_time, credit, adjustment, tax] }
+
+    InvoiceOut:
+      type: object
+      properties:
+        id:                   { type: integer }
+        invoice_number:       { type: string, example: "INV-2024-00001" }
+        customer_id:          { type: integer }
+        customer_name:        { type: string }
+        quote_id:             { type: integer, nullable: true }
+        status:               { $ref: "#/components/schemas/InvoiceStatus" }
+        billing_period_start: { type: string, nullable: true }
+        billing_period_end:   { type: string, nullable: true }
+        due_date:             { type: string, nullable: true }
+        subtotal:             { type: number }
+        tax_rate:             { type: number }
+        tax_amount:           { type: number }
+        total_amount:         { type: number }
+        paid_amount:          { type: number }
+        balance_due:          { type: number }
+        currency:             { type: string, default: "USD" }
+        line_items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceLineItemOut"
+          nullable: true
+
+    CreateInvoiceRequest:
+      type: object
+      properties:
+        customer_id:          { type: integer }
+        quote_id:             { type: integer, nullable: true }
+        billing_period_start: { type: string, format: date, nullable: true }
+        billing_period_end:   { type: string, format: date, nullable: true }
+        notes:                { type: string, nullable: true }
+      required: [customer_id]
+
+    UpdateInvoiceStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/InvoiceStatus"
+      required: [status]
+
+    PaymentOut:
+      type: object
+      properties:
+        id:              { type: integer }
+        invoice_id:      { type: integer }
+        customer_id:     { type: integer }
+        amount:          { type: number }
+        payment_method:  { $ref: "#/components/schemas/PaymentMethod" }
+        status:          { type: string, enum: [pending, completed, failed, refunded] }
+        transaction_ref: { type: string, nullable: true }
+        paid_at:         { type: string, nullable: true }
+
+    CreatePaymentRequest:
+      type: object
+      properties:
+        invoice_id:      { type: integer }
+        amount:          { type: number, minimum: 0.01 }
+        payment_method:  { $ref: "#/components/schemas/PaymentMethod" }
+        transaction_ref: { type: string, nullable: true }
+      required: [invoice_id, amount, payment_method]
+
+    AnomalyOut:
+      type: object
+      properties:
+        id:               { type: integer }
+        invoice_id:       { type: integer }
+        invoice_number:   { type: string }
+        customer_id:      { type: integer }
+        customer_name:    { type: string }
+        anomaly_type:     { $ref: "#/components/schemas/AnomalyType" }
+        severity:         { $ref: "#/components/schemas/Severity" }
+        amount_affected:  { type: number, nullable: true }
+        description:      { type: string }
+        status:           { $ref: "#/components/schemas/AnomalyStatus" }
+        detected_at:      { type: string }
+        resolved_at:      { type: string, nullable: true }
+
+    CreateAnomalyRequest:
+      type: object
+      properties:
+        invoice_id:      { type: integer }
+        anomaly_type:    { $ref: "#/components/schemas/AnomalyType" }
+        severity:        { $ref: "#/components/schemas/Severity" }
+        amount_affected: { type: number, nullable: true }
+        description:     { type: string }
+      required: [invoice_id, anomaly_type, severity, description]
+
+    UpdateAnomalyStatusRequest:
+      type: object
+      properties:
+        status:     { $ref: "#/components/schemas/AnomalyStatus" }
+        resolution: { type: string, nullable: true }
+      required: [status]
+
+    BillingMetrics:
+      type: object
+      properties:
+        invoices_issued_today:   { type: integer }
+        invoices_paid_today:     { type: integer }
+        invoices_overdue:        { type: integer }
+        revenue_collected_mtd:   { type: number }
+        anomalies_open:          { type: integer }
+        anomalies_critical:      { type: integer }
+        leakage_amount_flagged:  { type: number }
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Invoice INV-9999-99999 not found"

@@ -1,0 +1,496 @@
+openapi: "3.0.3"
+info:
+  title: Project HalfBill — FSM API
+  description: |
+    Field Service Management module of the OneBill revenue operations platform.
+    Covers technician management, job lifecycle, and scheduling.
+    Implement in fastapi_app/routers/fsm.py.
+    MCP tools in agents/fsm/fsm_tools.py call these endpoints.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8001
+    description: Local development server (Product FastAPI)
+
+tags:
+  - name: Technicians
+    description: Technician profiles, availability, and schedules
+  - name: Jobs
+    description: Field job lifecycle — create, assign, complete
+  - name: Metrics
+    description: Agentic Hub business metrics
+
+paths:
+
+  # ── Technicians ───────────────────────────────────────────────
+
+  /fsm/technicians:
+    get:
+      summary: List all technicians
+      tags: [Technicians]
+      responses:
+        "200":
+          description: All 25 technicians ordered by zone then name
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TechnicianOut"
+
+  /fsm/technicians/available:
+    get:
+      summary: Get available technicians with optional zone and specialization filter
+      tags: [Technicians]
+      parameters:
+        - name: zone
+          in: query
+          schema:
+            $ref: "#/components/schemas/Zone"
+          description: Filter by service zone
+        - name: specialization
+          in: query
+          schema:
+            $ref: "#/components/schemas/Specialization"
+          description: Filter by skill — uses Postgres array containment
+      responses:
+        "200":
+          description: Available technicians matching filters — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TechnicianOut"
+
+  /fsm/technicians/{technician_id}:
+    get:
+      summary: Get one technician by ID
+      tags: [Technicians]
+      parameters:
+        - $ref: "#/components/parameters/TechnicianId"
+      responses:
+        "200":
+          description: Technician profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /fsm/technicians/{technician_id}/schedule:
+    get:
+      summary: Get technician availability for the next 14 days
+      tags: [Technicians]
+      parameters:
+        - $ref: "#/components/parameters/TechnicianId"
+      responses:
+        "200":
+          description: Technician with daily schedule slots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianWithSchedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Jobs ──────────────────────────────────────────────────────
+
+  /fsm/jobs:
+    post:
+      summary: Create a new field service job
+      tags: [Jobs]
+      description: |
+        Creates a job with status 'pending'.
+        If ticket_id provided: links to ServiceDesk ticket (A2A link).
+        If no address provided: copies from customer record.
+        Generates job_number in format JOB-YYYY-NNNNN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "201":
+          description: Job created with status pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      summary: List jobs with optional filters
+      tags: [Jobs]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/JobStatus"
+        - name: priority
+          in: query
+          schema:
+            $ref: "#/components/schemas/JobPriority"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Job list most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobOut"
+
+  /fsm/jobs/pending:
+    get:
+      summary: Get all unassigned pending jobs ordered by priority
+      tags: [Jobs]
+      responses:
+        "200":
+          description: Pending jobs emergency first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobOut"
+
+  /fsm/jobs/scheduled:
+    get:
+      summary: Get all jobs scheduled for a specific date
+      tags: [Jobs]
+      parameters:
+        - name: scheduled_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2024-06-10"
+      responses:
+        "200":
+          description: Jobs for that date
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobOut"
+
+  /fsm/jobs/{job_number}:
+    get:
+      summary: Get one job by job number including assignment
+      tags: [Jobs]
+      parameters:
+        - $ref: "#/components/parameters/JobNumber"
+      responses:
+        "200":
+          description: Job with technician assignment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /fsm/jobs/{job_number}/status:
+    put:
+      summary: Update job status
+      tags: [Jobs]
+      description: |
+        Status transitions with side effects:
+        in_progress: sets actual_start = NOW()
+        completed: sets actual_end = NOW(), frees technician to 'available',
+                   increments technician jobs_completed
+        cancelled / no_show: frees technician if assigned
+      parameters:
+        - $ref: "#/components/parameters/JobNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateJobStatusRequest"
+      responses:
+        "200":
+          description: Updated job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /fsm/jobs/{job_number}/assign:
+    post:
+      summary: Assign a technician to a job
+      tags: [Jobs]
+      description: |
+        Validates technician status = 'available' before assigning.
+        Sets job status to 'assigned'.
+        Sets technician status to 'on_job'.
+      parameters:
+        - $ref: "#/components/parameters/JobNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignTechnicianRequest"
+      responses:
+        "200":
+          description: Job with assignment confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Technician not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /fsm/jobs/customer/{customer_id}:
+    get:
+      summary: Get all jobs for a customer
+      tags: [Jobs]
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer jobs most recent first — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobOut"
+
+  # ── Metrics ───────────────────────────────────────────────────
+
+  /fsm/metrics:
+    get:
+      summary: FSM business metrics for Agentic Hub
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Aggregate metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FSMMetrics"
+
+components:
+
+  parameters:
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    TechnicianId:
+      name: technician_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    JobNumber:
+      name: job_number
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "JOB-2024-00001"
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    Conflict:
+      description: Business rule violation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    ValidationError:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+
+  schemas:
+
+    Zone:
+      type: string
+      enum: [North, South, East, West, Central]
+
+    Specialization:
+      type: string
+      enum: [fiber, mobile, equipment, installation]
+
+    TechnicianStatus:
+      type: string
+      enum: [available, on_job, off_duty, on_leave]
+
+    JobStatus:
+      type: string
+      enum: [pending, assigned, en_route, in_progress, completed, cancelled, no_show]
+
+    JobType:
+      type: string
+      enum: [installation, repair, maintenance, equipment_swap, inspection, disconnection]
+
+    JobPriority:
+      type: string
+      enum: [low, medium, high, emergency]
+
+    ScheduleSlot:
+      type: object
+      properties:
+        schedule_date: { type: string, format: date }
+        start_time:    { type: string, example: "09:00" }
+        end_time:      { type: string, example: "17:00" }
+        is_available:  { type: boolean }
+
+    TechnicianOut:
+      type: object
+      properties:
+        id:               { type: integer }
+        technician_code:  { type: string, example: "TECH-001" }
+        name:             { type: string }
+        email:            { type: string, nullable: true }
+        phone:            { type: string, nullable: true }
+        specializations:
+          type: array
+          items:
+            type: string
+        status:           { $ref: "#/components/schemas/TechnicianStatus" }
+        zone:             { type: string }
+        jobs_completed:   { type: integer }
+        rating:           { type: number }
+
+    TechnicianWithSchedule:
+      type: object
+      properties:
+        technician:
+          $ref: "#/components/schemas/TechnicianOut"
+        schedule:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleSlot"
+
+    JobAssignmentOut:
+      type: object
+      properties:
+        technician_id:    { type: integer }
+        technician_name:  { type: string }
+        technician_phone: { type: string, nullable: true }
+        assigned_at:      { type: string }
+        is_primary:       { type: boolean }
+
+    JobOut:
+      type: object
+      properties:
+        id:                   { type: integer }
+        job_number:           { type: string, example: "JOB-2024-00001" }
+        customer_id:          { type: integer }
+        customer_name:        { type: string }
+        ticket_id:            { type: integer, nullable: true }
+        invoice_id:           { type: integer, nullable: true }
+        job_type:             { $ref: "#/components/schemas/JobType" }
+        status:               { $ref: "#/components/schemas/JobStatus" }
+        priority:             { $ref: "#/components/schemas/JobPriority" }
+        description:          { type: string }
+        address_line1:        { type: string, nullable: true }
+        city:                 { type: string, nullable: true }
+        state:                { type: string, nullable: true }
+        zip:                  { type: string, nullable: true }
+        scheduled_date:       { type: string, nullable: true }
+        scheduled_start_time: { type: string, nullable: true }
+        scheduled_end_time:   { type: string, nullable: true }
+        actual_start:         { type: string, nullable: true }
+        actual_end:           { type: string, nullable: true }
+        completion_notes:     { type: string, nullable: true }
+        parts_used:           { type: object, nullable: true }
+        assignment:
+          $ref: "#/components/schemas/JobAssignmentOut"
+          nullable: true
+
+    CreateJobRequest:
+      type: object
+      properties:
+        customer_id:          { type: integer }
+        ticket_id:            { type: integer, nullable: true }
+        job_type:             { $ref: "#/components/schemas/JobType" }
+        priority:             { $ref: "#/components/schemas/JobPriority" }
+        description:          { type: string }
+        address_line1:        { type: string, nullable: true }
+        city:                 { type: string, nullable: true }
+        state:                { type: string, nullable: true }
+        zip:                  { type: string, nullable: true }
+        scheduled_date:
+          type: string
+          format: date
+          nullable: true
+        scheduled_start_time: { type: string, example: "09:00", nullable: true }
+        scheduled_end_time:   { type: string, example: "11:00", nullable: true }
+      required: [customer_id, job_type, description]
+
+    AssignTechnicianRequest:
+      type: object
+      properties:
+        technician_id:
+          type: integer
+      required: [technician_id]
+
+    UpdateJobStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        completion_notes:
+          type: string
+          nullable: true
+          description: Required when status = completed
+        parts_used:
+          type: object
+          nullable: true
+      required: [status]
+
+    FSMMetrics:
+      type: object
+      properties:
+        jobs_scheduled_today:      { type: integer }
+        jobs_completed_today:      { type: integer }
+        jobs_in_progress:          { type: integer }
+        jobs_pending_assignment:   { type: integer }
+        technician_utilisation_pct:{ type: number }
+        completion_rate_7d_pct:    { type: number }
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Job JOB-9999-99999 not found"

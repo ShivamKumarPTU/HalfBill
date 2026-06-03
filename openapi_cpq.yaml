@@ -1,0 +1,460 @@
+openapi: "3.0.3"
+info:
+  title: Project HalfBill — CPQ API
+  description: |
+    Configure, Price, Quote module of the OneBill revenue operations platform.
+    This spec defines all endpoints the CPQ team must implement in
+    fastapi_app/routers/cpq.py. Schemas map directly to Pydantic models
+    in that file. MCP tools in agents/cpq/cpq_tools.py call these endpoints.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8001
+    description: Local development server (Product FastAPI)
+
+tags:
+  - name: Products
+    description: Telecom product catalog — read only, managed by seed data
+  - name: Customers
+    description: Customer lookup — read only reference data
+  - name: Quotes
+    description: Multi-item quote lifecycle — create, update, discount
+  - name: Metrics
+    description: Agentic Hub business metrics — not exposed as MCP tool
+
+paths:
+
+  # ── Products ──────────────────────────────────────────────────
+
+  /cpq/products:
+    get:
+      summary: List all active products
+      tags: [Products]
+      responses:
+        "200":
+          description: List of active products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProductSummary"
+
+  /cpq/products/search:
+    get:
+      summary: Search products by name or description
+      tags: [Products]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+          description: Search term matched against product name and description
+      responses:
+        "200":
+          description: Matching products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProductSummary"
+
+  /cpq/products/{product_id}:
+    get:
+      summary: Get one product by ID
+      tags: [Products]
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Product details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Customers ─────────────────────────────────────────────────
+
+  /cpq/customers:
+    get:
+      summary: List customers (paginated)
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: List of customers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomerSummary"
+
+  /cpq/customers/search:
+    get:
+      summary: Find customers by name
+      tags: [Customers]
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+          description: Case-insensitive partial match on customer name
+      responses:
+        "200":
+          description: Matching customers — returns empty list if none found
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomerSummary"
+
+  /cpq/customers/{customer_id}:
+    get:
+      summary: Get one customer by ID
+      tags: [Customers]
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Quotes ────────────────────────────────────────────────────
+
+  /cpq/quotes:
+    post:
+      summary: Create a new multi-item quote
+      tags: [Quotes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuoteRequest"
+      responses:
+        "201":
+          description: Quote created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteOut"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      summary: List quotes with optional status filter
+      tags: [Quotes]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/QuoteStatus"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: List of quotes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuoteOut"
+
+  /cpq/quotes/{quote_number}:
+    get:
+      summary: Get one quote by quote number including line items
+      tags: [Quotes]
+      parameters:
+        - $ref: "#/components/parameters/QuoteNumber"
+      responses:
+        "200":
+          description: Quote with line items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /cpq/quotes/{quote_number}/status:
+    put:
+      summary: Update quote status
+      tags: [Quotes]
+      parameters:
+        - $ref: "#/components/parameters/QuoteNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateQuoteStatusRequest"
+      responses:
+        "200":
+          description: Updated quote
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /cpq/quotes/{quote_number}/discount:
+    post:
+      summary: Apply or update discount on a quote
+      tags: [Quotes]
+      parameters:
+        - $ref: "#/components/parameters/QuoteNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyDiscountRequest"
+      responses:
+        "200":
+          description: Quote with updated pricing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteOut"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /cpq/quotes/customer/{customer_id}:
+    get:
+      summary: Get all quotes for a customer
+      tags: [Quotes]
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer quotes — empty list if none
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuoteOut"
+
+  # ── Metrics ───────────────────────────────────────────────────
+
+  /cpq/metrics:
+    get:
+      summary: CPQ business metrics for Agentic Hub
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Aggregate metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CPQMetrics"
+
+# ── Components ─────────────────────────────────────────────────
+
+components:
+
+  parameters:
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    QuoteNumber:
+      name: quote_number
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "QT-2024-00001"
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    Conflict:
+      description: Business rule violation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    ValidationError:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+
+  schemas:
+
+    QuoteStatus:
+      type: string
+      enum: [draft, presented, accepted, rejected, expired]
+
+    CustomerSummary:
+      type: object
+      properties:
+        id:           { type: integer }
+        customer_code:{ type: string, example: "CUST-00001" }
+        name:         { type: string }
+        email:        { type: string }
+        account_type: { type: string, enum: [residential, business] }
+        status:       { type: string, enum: [active, suspended, churned] }
+        city:         { type: string, nullable: true }
+        state:        { type: string, nullable: true }
+      required: [id, customer_code, name, email, account_type, status]
+
+    ProductSummary:
+      type: object
+      properties:
+        id:           { type: integer }
+        product_code: { type: string, example: "PRD-INT-1G" }
+        name:         { type: string }
+        category:     { type: string, enum: [internet, mobile, ott, equipment, installation, bundle] }
+        billing_type: { type: string, enum: [monthly, annual, one_time, prepaid] }
+        contract_type:{ type: string, enum: [postpaid, prepaid, no_contract] }
+        base_price:   { type: number, format: float }
+        setup_fee:    { type: number, format: float }
+        description:  { type: string, nullable: true }
+      required: [id, product_code, name, category, billing_type, base_price]
+
+    QuoteLineItemIn:
+      type: object
+      properties:
+        product_id:       { type: integer }
+        quantity:         { type: integer, default: 1, minimum: 1 }
+        discount_percent: { type: number, default: 0.0, minimum: 0.0, maximum: 30.0 }
+      required: [product_id]
+
+    QuoteLineItemOut:
+      type: object
+      properties:
+        id:               { type: integer }
+        product_id:       { type: integer }
+        product_name:     { type: string }
+        quantity:         { type: integer }
+        list_price:       { type: number }
+        discount_percent: { type: number }
+        unit_price:       { type: number }
+        subtotal:         { type: number }
+        is_recurring:     { type: boolean }
+
+    QuoteOut:
+      type: object
+      properties:
+        id:               { type: integer }
+        quote_number:     { type: string, example: "QT-2024-00001" }
+        customer_id:      { type: integer }
+        customer_name:    { type: string }
+        status:           { $ref: "#/components/schemas/QuoteStatus" }
+        total_mrr:        { type: number }
+        total_otc:        { type: number }
+        total_value:      { type: number }
+        discount_percent: { type: number }
+        discount_reason:  { type: string, nullable: true }
+        valid_until:      { type: string, nullable: true }
+        notes:            { type: string, nullable: true }
+        created_by:       { type: string, nullable: true }
+        line_items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuoteLineItemOut"
+          nullable: true
+
+    CreateQuoteRequest:
+      type: object
+      properties:
+        customer_id:
+          type: integer
+        line_items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuoteLineItemIn"
+          minItems: 1
+        discount_percent:
+          type: number
+          default: 0.0
+          minimum: 0.0
+          maximum: 30.0
+        discount_reason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required: [customer_id, line_items]
+
+    UpdateQuoteStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/QuoteStatus"
+        notes:
+          type: string
+          nullable: true
+      required: [status]
+
+    ApplyDiscountRequest:
+      type: object
+      properties:
+        discount_percent:
+          type: number
+          minimum: 0.0
+          maximum: 30.0
+        reason:
+          type: string
+      required: [discount_percent, reason]
+
+    CPQMetrics:
+      type: object
+      properties:
+        quotes_created_today:  { type: integer }
+        quotes_accepted_today: { type: integer }
+        acceptance_rate_pct:   { type: number }
+        total_mrr_pipeline:    { type: number }
+        avg_quote_value:       { type: number }
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Quote QT-9999-99999 not found"
