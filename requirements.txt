@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+asyncpg
+mcp>=1.0.0
+streamlit
+plotly
+pandas
+httpx
+pytest
+groq
+python-dotenv

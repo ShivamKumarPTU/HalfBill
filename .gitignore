@@ -1,0 +1,41 @@
+# ── Secrets (NEVER commit these) ─────────────────────────────
+.env
+*.env
+
+# ── Cloned intern repo & legacy dirs (not part of this project) ──
+onebill-agents/
+platform/
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Test & debug output ───────────────────────────────────────
+test_output.txt
+test_error.txt
+router_out.txt
+*.log
+
+# ── Virtual environments ──────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── IDE / OS ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# ── Database ──────────────────────────────────────────────────
+*.sql.bak
+dump.sql
